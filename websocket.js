@@ -4,13 +4,10 @@ import async from 'async';
 import nconf from 'nconf';
 import Cron from 'cron';
 import {createClient} from './redisClient';
+import Server from 'socket.io';
 
-// Hapi server imports
-import Hapi from 'hapi';
-import Nes from 'nes';
-let config, subClient;
+let config, subClient, pubClient, io;
 const CronJob = Cron.CronJob,
-      server = new Hapi.Server(),
       ping = function() {
         subClient.ping(function (err, res) {
           console.log("redis server pinged");
@@ -33,9 +30,8 @@ const CronJob = Cron.CronJob,
             payload = {
               data: message
             };
-
-        server.publish(
-          '/'+subChannels[0],
+        io.emit(
+          subChannels[0],
           {
             type: subChannels[1],
             payload: payload
@@ -50,6 +46,17 @@ const CronJob = Cron.CronJob,
           message = JSON.parse(message);
           sendMessage(channel, message);
         });
+      },
+      onMessage = function (socket, message) {
+        console.log("incoming: ", socket.id);
+        message.clientId = socket.id;
+        pubClient.publish("congregate:"+message.type, JSON.stringify(message));
+        //server.publish('/changes', message);
+        //server.eachSocket(function(socket){
+        //  console.log("socket list: ", socket.id);
+        //});
+        //switch (message.type) {
+        //}
       };
 // Start server function
 config = nconf.argv()
@@ -64,29 +71,31 @@ createClient().then(
   }
 );
 
-server.connection(
-  {
-    host: config.get("host"),
-    port: config.get("port")
+createClient().then(
+  function(client) {
+    pubClient = client;
   }
 );
-// Webpack compiler
 
-// Register Hapi plugins
-server.register(
-  Nes,
-  ( error ) => {
-    if ( error ) {
-      console.error( error );
+io = new Server(config.get("port"));
+io.on('connection', function (socket) {
+  io.emit('global', { clientConnected: socket.id });
+  socket.on(
+    'update',
+    function (data) {
+      onMessage(socket, data);
     }
-
-    server.subscription('/attendance');
-    server.subscription('/classes');
-    server.subscription('/notes');
-    server.start(
-      (err) => {
-        console.log( '==> Websocket Server is listening on', server.info.uri );
-      }
-    );
-  }
-);
+  );
+  socket.on(
+    'insert',
+    function (data) {
+      onMessage(socket, data);
+    }
+  );
+  socket.on(
+    'delete',
+    function (data) {
+      onMessage(socket, data);
+    }
+  );
+});
