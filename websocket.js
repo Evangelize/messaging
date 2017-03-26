@@ -82,7 +82,7 @@ const setSubscription = () => {
 const onMessage = (socket, message) => {
   // console.log("incoming: ", socket);
   //message.clientId = socket.id;
-  pubClient.publish("congregate:"+message.type, JSON.stringify(message));
+  pubClient.publish("evangelize:"+message.type, JSON.stringify(message));
   //server.publish('/changes', message);
   //server.eachSocket(function(socket){
   //  console.log("socket list: ", socket.id);
