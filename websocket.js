@@ -9,69 +9,90 @@ import { createClient } from './redisClient';
 import WebSocket from 'websocket';
 import http from 'http';
 import jwt from 'jsonwebtoken';
-let subClient, pubClient;
-const CronJob = Cron.CronJob,
-      ping = function() {
-        subClient.ping(function (err, res) {
-          console.log("redis server pinged");
-        });
-      },
-      startPing = function() {
-        new CronJob(
-          '05 * * * * *',
-          function() {
-            ping();
-          },
-          null,
-          true,
-          'America/Chicago'
-        );
-      },
-      sendMessage = function(channel, message) {
-        var _channel = channel.split(":"),
-            subChannels = _channel[1].split("."),
-            payload = {
-              data: message
-            };
-        /*
-        ws.broadcast(
-          subChannels[0],
-          {
-            type: subChannels[1],
-            payload: payload
-          }
-        );
-        */
-        ws.broadcast(JSON.stringify(
-          {
-            type: subChannels[1],
-            payload: payload
-          }
-        ));
-      },
-      setSubscription = function() {
-        subClient.psubscribe("congregate:*");
-        console.log("Subscribing");
-        subClient.on("pmessage", function (pattern, channel, message) {
-          console.log("channel ", channel, ": ", message);
-          message = JSON.parse(message);
-          sendMessage(channel, message);
-        });
-      },
-      onMessage = function (socket, message) {
-        // console.log("incoming: ", socket);
-        //message.clientId = socket.id;
-        pubClient.publish("congregate:"+message.type, JSON.stringify(message));
-        //server.publish('/changes', message);
-        //server.eachSocket(function(socket){
-        //  console.log("socket list: ", socket.id);
-        //});
-        //switch (message.type) {
-        //}
-      };
+import shortid from 'shortid';
+
+let subClient;
+let pubClient;
+class Connections {
+  connections = [];
+  add(connection) {
+    this.connections.push(connection);
+  }
+
+  remove(id) {
+    this.connections = this.connections.filter(e => e.id !== id);
+  }
+
+  list() {
+    console.log(this.connections);
+  }
+};
+const connections = new Connections();
+const CronJob = Cron.CronJob;
+const ping = () => {
+  subClient.ping((err, res) => {
+    console.log("redis server pinged");
+  });
+};
+const startPing = () => {
+  new CronJob(
+    '05 * * * * *',
+    function() {
+      ping();
+    },
+    null,
+    true,
+    'America/Chicago'
+  );
+};
+const sendMessage = (channel, message) => {
+  const _channel = channel.split(":");
+  const subChannels = _channel[1].split(".");
+  const payload = {
+    data: message
+  };
+  /*
+  ws.broadcast(
+    subChannels[0],
+    {
+      type: subChannels[1],
+      payload: payload
+    }
+  );
+  */
+  ws.broadcast(JSON.stringify(
+    {
+      type: subChannels[1],
+      payload: payload
+    }
+  ));
+};
+const setSubscription = () => {
+  subClient.psubscribe("evangelize:*");
+  console.log("Subscribing");
+  subClient.on(
+    "pmessage", 
+    (pattern, channel, message) => {
+      console.log("channel ", channel, ": ", message);
+      message = JSON.parse(message);
+      sendMessage(channel, message);
+    }
+  );
+};
+const onMessage = (socket, message) => {
+  // console.log("incoming: ", socket);
+  //message.clientId = socket.id;
+  pubClient.publish("congregate:"+message.type, JSON.stringify(message));
+  //server.publish('/changes', message);
+  //server.eachSocket(function(socket){
+  //  console.log("socket list: ", socket.id);
+  //});
+  //switch (message.type) {
+  //}
+};
 const WebSocketServer = WebSocket.server;
 const server = http.createServer(
-  function(request, response) {
+  (request, response) => {
     console.log((new Date()) + ' Received request for ' + request.url);
     response.writeHead(404);
     response.end();
@@ -83,7 +104,7 @@ const config = nconf.argv()
  .file({ file: 'config/settings.json' });
 const cert = fs.readFileSync(config.get("jwtCert"));
 createClient().then(
-  function(client) {
+  (client) => {
     subClient = client;
     startPing();
     setSubscription();
@@ -91,7 +112,7 @@ createClient().then(
 );
 
 createClient().then(
-  function(client) {
+  (client) => {
     pubClient = client;
   }
 );
@@ -109,9 +130,10 @@ const ws = new WebSocketServer({
     // facilities built into the protocol and the browser.  You should
     // *always* verify the connection's origin and decide whether or not
     // to accept it.
-    autoAcceptConnections: false
+    autoAcceptConnections: false,
+    clientTracking: true
 });
-const validateJwt = function(resourceUrl, callback) {
+const validateJwt = (resourceUrl, callback) => {
   let query = url.parse(resourceUrl, true).query;
   console.log('validateJwt', query.token);
 
@@ -121,13 +143,13 @@ const validateJwt = function(resourceUrl, callback) {
     {  
       algorithms: ['RS256',],
     }, 
-    function(err, decoded) {
+    (err, decoded) => {
       let retVal = true;
       if (err) {
         console.log('invalid token', err);
         retVal = false;
       }
-      callback(retVal) ;
+      callback(retVal, decoded) ;
     }
   );
 };
@@ -136,7 +158,7 @@ const validateJwt = function(resourceUrl, callback) {
 
 ws.on(
   'request', 
-  function(request) {
+  (request) => {
     /**
     if (!originIsAllowed(request.origin)) {
       // Make sure we only accept requests from an allowed origin
@@ -148,18 +170,20 @@ ws.on(
 
     validateJwt(
       request.resourceURL,
-      function(valid){
+      (valid, token) => {
         if (!valid) {
           request.reject();
           console.log((new Date()) + ' Connection from origin ' + request.remoteAddress + ' rejected.');
           return;
         }
         // console.log(request);
+        const id = shortid.generate();
         let connection = request.accept();
+        connection.id = id;
         console.log((new Date()) + ' Connection accepted from', connection.remoteAddress);
         connection.on(
           'message', 
-          function(data) {
+          (data) => {
             if (data.type === 'utf8') {
               console.log('Received Message: ' + data.utf8Data);
               //connection.sendUTF(data.utf8Data);
@@ -176,9 +200,35 @@ ws.on(
             }
           }
         );
-        connection.on('close', function(reasonCode, description) {
-          console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
+        console.log(token);
+        connections.add({
+          id,
+          peopleId: token.peopleId,
+          entityId: token.entityId,
+          ws: connection,
         });
+        connections.list();
+        connection.on(
+          'close', 
+          (reasonCode, description) => {
+            console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.', token.peopleId, id);
+            connections.remove(id);
+            connections.list();
+          }
+        );
+        connection.on(
+          'ping', 
+          (data, flags) => {
+            console.log('ping', token.peopleId, id);
+          }
+        );
+        connection.on(
+          'pong', 
+          (data, flags) => {
+            console.log('pong', token.peopleId, id);
+          }
+        );
+        connection.ping({data: 'ping'});
       }
     );
   }
