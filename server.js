@@ -10,9 +10,11 @@ import WebSocket from 'websocket';
 import http from 'http';
 import jwt from 'jsonwebtoken';
 import shortid from 'shortid';
+import * as admin from "firebase-admin";
 
 let subClient;
 let pubClient;
+
 class Connections {
   connections = [];
   add(connection) {
@@ -25,6 +27,14 @@ class Connections {
 
   list() {
     console.log(this.connections);
+  }
+
+  getByEntityId(entityId) {
+    return this.connections.filter(e => e.entityId === entityId);
+  }
+
+  getByPeopleId(peopleId) {
+    return this.connections.filter(e => e.peopleId === peopleId);
   }
 };
 const connections = new Connections();
@@ -60,13 +70,46 @@ const sendMessage = (channel, message) => {
     }
   );
   */
-  ws.broadcast(JSON.stringify(
-    {
-      type: subChannels[1],
-      payload: payload
-    }
-  ));
+  broadcastEntity(
+    message.entityId, 
+    JSON.stringify(
+      {
+        type: subChannels[1],
+        payload: payload
+      }
+    )
+  );
 };
+// Broadcast to all open connections
+const broadcastEntity = (entityId, data) => {
+  async.each(
+    connections.getByEntityId(entityId),
+    (client, cb) => {
+      const connection = client.ws;
+      if (connection.connected) {
+        connection.send(data);
+      }
+      cb();
+    },
+    (err) => {
+      if (err) {
+        console.log(err);
+      }
+      console.log('done broadcasting to entity', entityId)
+    }
+
+  );
+}
+
+// Send a message to a connection by its connectionID
+function sendToPeopleId(connectionID, data) {
+  var connection = connections[connectionID];
+  if (connection && connection.connected) {
+    connection.send(data);
+  }
+}
+
+
 const setSubscription = () => {
   subClient.psubscribe("evangelize:*");
   console.log("Subscribing");
@@ -102,6 +145,13 @@ const server = http.createServer(
 const config = nconf.argv()
  .env()
  .file({ file: 'config/settings.json' });
+
+const serviceAccount = require(config.get("push:fcm:key"));
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: config.get("push:fcm:databaseUri")
+});
+
 const cert = fs.readFileSync(config.get("jwtCert"));
 createClient().then(
   (client) => {
