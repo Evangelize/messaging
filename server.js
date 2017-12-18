@@ -58,6 +58,7 @@ const startPing = () => {
 const sendMessage = (channel, message) => {
   const _channel = channel.split(":");
   const subChannels = _channel[1].split(".");
+  const entityId = message.entityId || message.record.entityId;
   const payload = {
     data: message
   };
@@ -71,7 +72,7 @@ const sendMessage = (channel, message) => {
   );
   */
   broadcastEntity(
-    message.entityId, 
+    entityId, 
     JSON.stringify(
       {
         type: subChannels[1],
