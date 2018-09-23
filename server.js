@@ -11,6 +11,8 @@ import http from 'http';
 import jwt from 'jsonwebtoken';
 import shortid from 'shortid';
 import * as admin from "firebase-admin";
+import socketio from 'socket.io';
+import jwtAuth from 'socketio-jwt-auth';
 
 let subClient;
 let pubClient;
@@ -58,28 +60,30 @@ const startPing = () => {
 const sendMessage = (channel, message) => {
   const _channel = channel.split(":");
   const subChannels = _channel[1].split(".");
-  const entityId = message.entityId || message.record.entityId;
-  const payload = {
-    data: message
-  };
-  /*
-  ws.broadcast(
-    subChannels[0],
-    {
-      type: subChannels[1],
-      payload: payload
-    }
-  );
-  */
-  broadcastEntity(
-    entityId, 
-    JSON.stringify(
+  try {
+    const entityId = message.entityId || message.record.entityId;
+    const payload = {
+      data: message
+    };
+    /*
+    ws.broadcast(
+      subChannels[0],
       {
         type: subChannels[1],
         payload: payload
       }
-    )
-  );
+    );
+    */
+    broadcastEntity(
+      entityId, 
+      {
+        type: subChannels[1],
+        payload: payload
+      }
+    );
+    } catch (e) {
+      console.log(e);
+    }
 };
 // Broadcast to all open connections
 const broadcastEntity = (entityId, data) => {
@@ -88,7 +92,7 @@ const broadcastEntity = (entityId, data) => {
     (client, cb) => {
       const connection = client.ws;
       if (connection.connected) {
-        connection.send(data);
+        connection.emit('message', data);
       }
       cb();
     },
@@ -112,21 +116,22 @@ function sendToPeopleId(connectionID, data) {
 
 
 const setSubscription = () => {
-  subClient.psubscribe("evangelize:*");
+  subClient.psubscribe("evangelize:outgoing:*");
   console.log("Subscribing");
   subClient.on(
     "pmessage", 
     (pattern, channel, message) => {
       console.log("channel ", channel, ": ", message);
-      message = JSON.parse(message);
-      sendMessage(channel, message);
+      const msg = JSON.parse(message);
+      sendMessage(channel, msg);
     }
   );
 };
 const onMessage = (socket, message) => {
   // console.log("incoming: ", socket);
   //message.clientId = socket.id;
-  pubClient.publish("evangelize:"+message.type, JSON.stringify(message));
+  const msg = JSON.parse(message);
+  pubClient.publish("evangelize:incoming:"+msg.type, message);
   //server.publish('/changes', message);
   //server.eachSocket(function(socket){
   //  console.log("socket list: ", socket.id);
@@ -147,10 +152,10 @@ const config = nconf.argv()
  .env()
  .file({ file: 'config/settings.json' });
 
-const serviceAccount = require(config.get("push:fcm:key"));
+const serviceAccount = require(config.get("firebase:key"));
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: config.get("push:fcm:databaseUri")
+  databaseURL: config.get("firebase:databaseUri")
 });
 
 const cert = fs.readFileSync(config.get("jwtCert"));
@@ -171,19 +176,33 @@ createClient().then(
 server.listen(
   config.get("port"), 
   function() {
-    console.log((new Date()) + ' Server is listening on port');
+    console.log(`${new Date()} Server is listening on port ${config.get('port')}`);
   }
 );
-const ws = new WebSocketServer({
-    httpServer: server,
-    // You should not use autoAcceptConnections for production
-    // applications, as it defeats all standard cross-origin protection
-    // facilities built into the protocol and the browser.  You should
-    // *always* verify the connection's origin and decide whether or not
-    // to accept it.
-    autoAcceptConnections: false,
-    clientTracking: true
+const ws = socketio(server);
+ws.use((socket, next) => {
+  let query = url.parse(socket.request.url, true).query;
+  console.log('validateJwt', query.token);
+
+  jwt.verify(
+    query.token, 
+    cert,
+    {  
+      algorithms: ['RS256',],
+    }, 
+    (err, decoded) => {
+      let retVal = true;
+      if (err) {
+        console.log('invalid token', err);
+        err  = new Error('Authentication error');
+      } else {
+        socket.request.user = decoded;
+      }
+      next(err);
+    }
+  );
 });
+
 const validateJwt = (resourceUrl, callback) => {
   let query = url.parse(resourceUrl, true).query;
   console.log('validateJwt', query.token);
@@ -208,79 +227,47 @@ const validateJwt = (resourceUrl, callback) => {
 
 
 ws.on(
-  'request', 
-  (request) => {
-    /**
-    if (!originIsAllowed(request.origin)) {
-      // Make sure we only accept requests from an allowed origin
-      request.reject();
-      console.log((new Date()) + ' Connection from origin ' + request.origin + ' rejected.');
-      return;
-    }
-    **/
-
-    validateJwt(
-      request.resourceURL,
-      (valid, token) => {
-        if (!valid) {
-          request.reject();
-          console.log((new Date()) + ' Connection from origin ' + request.remoteAddress + ' rejected.');
-          return;
+  'connection', 
+  (connection) => {
+    const id = shortid.generate();
+    console.log((new Date()) + ' Connection accepted from', connection.remoteAddress);
+    connection.on(
+      'event', 
+      (data) => {
+        /*
+        if (data.type === 'utf8') {
+          console.log('Received Message: ' + data);
+          //connection.sendUTF(data.utf8Data);
+          try {
+            onMessage(connection, data);
+          } catch(e) {
+            console.log(e);
+          }
+          
+        } else if (data.type === 'binary') {
+          console.log('Received Binary Message of ' + data.binaryData.length + ' bytes');
+          //connection.sendBytes(data.binaryData);
         }
-        // console.log(request);
-        const id = shortid.generate();
-        let connection = request.accept();
-        connection.id = id;
-        console.log((new Date()) + ' Connection accepted from', connection.remoteAddress);
-        connection.on(
-          'message', 
-          (data) => {
-            if (data.type === 'utf8') {
-              console.log('Received Message: ' + data.utf8Data);
-              //connection.sendUTF(data.utf8Data);
-              try {
-                let command = JSON.parse(data.utf8Data);
-                onMessage(connection, command);
-              } catch(e) {
-                console.log(e);
-              }
-              
-            } else if (data.type === 'binary') {
-              console.log('Received Binary Message of ' + data.binaryData.length + ' bytes');
-              //connection.sendBytes(data.binaryData);
-            }
-          }
-        );
-        console.log(token);
-        connections.add({
-          id,
-          peopleId: token.peopleId,
-          entityId: token.entityId,
-          ws: connection,
-        });
-        connections.list();
-        connection.on(
-          'close', 
-          (reasonCode, description) => {
-            console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.', token.peopleId, id);
-            connections.remove(id);
-            connections.list();
-          }
-        );
-        connection.on(
-          'ping', 
-          (data, flags) => {
-            console.log('ping', token.peopleId, id);
-          }
-        );
-        connection.on(
-          'pong', 
-          (data, flags) => {
-            console.log('pong', token.peopleId, id);
-          }
-        );
-        connection.ping({data: 'ping'});
+        */
+        onMessage(connection, data);
       }
     );
+    console.log(connection.request.user);
+    connections.add({
+      id,
+      peopleId: connection.request.user.peopleId,
+      entityId: connection.request.user.entityId,
+      ws: connection,
+    });
+    connections.list();
+    connection.on(
+      'disconnect', 
+      () => {
+        console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.', connection.request.user.peopleId, id);
+        connections.remove(id);
+        connections.list();
+      }
+    );
+    // connection.ping({data: 'ping'});
   }
 );
