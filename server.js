@@ -14,6 +14,8 @@ import * as admin from "firebase-admin";
 import socketio from 'socket.io';
 import jwtAuth from 'socketio-jwt-auth';
 
+import config from './config';
+console.log(config);
 let subClient;
 let pubClient;
 
@@ -147,18 +149,14 @@ const server = http.createServer(
     response.end();
   }
 );
-// Start server function
-const config = nconf.argv()
- .env()
- .file({ file: 'config/settings.json' });
 
-const serviceAccount = require(config.get("firebase:key"));
+const serviceAccount = require(config.firebase.serviceAccount);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: config.get("firebase:databaseUri")
+  databaseURL: config.firebase.databaseUri,
 });
 
-const cert = fs.readFileSync(config.get("jwtCert"));
+const cert = fs.readFileSync(config.jwtCert);
 createClient().then(
   (client) => {
     subClient = client;
@@ -174,9 +172,9 @@ createClient().then(
 );
 
 server.listen(
-  config.get("port"), 
+  config.port, 
   function() {
-    console.log(`${new Date()} Server is listening on port ${config.get('port')}`);
+    console.log(`${new Date()} Server is listening on port ${config.port}`);
   }
 );
 const ws = socketio(server);

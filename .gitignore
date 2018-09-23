@@ -5,4 +5,5 @@ dist/
 *.map
 *.dist
 config/settings.json
+config/settings.js
 config/config.json
