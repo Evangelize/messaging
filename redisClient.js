@@ -2,21 +2,19 @@ import redis from 'redis';
 import path from 'path';
 import nconf from 'nconf';
 import Promise from 'bluebird';
-const config = nconf.argv()
-    .env()
-    .file({ file: path.join(__dirname, '/config/settings.json') });
+import config from './config';
 
 export default {
   createClient(cb) {
     return new Promise(function(resolve, reject){
       let client;
       client = redis.createClient(
-        config.get("redis:port"),
-        config.get("redis:host")
+        config.redis.port,
+        config.redis.host
       );
-      if (config.get("redis:db") >= 0) {
+      if (config.redis.db >= 0) {
         client.select(
-          config.get("redis:db"),
+          config.redis.db,
           function() {
             resolve(client);
           }
